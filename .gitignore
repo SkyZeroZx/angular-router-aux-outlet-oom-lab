@@ -4,3 +4,6 @@ dist/
 .angular/
 *.log
 *.zip
+
+# The write-up goes to the vendor, not into the lab archive. Kept on disk.
+angular-issue.md
