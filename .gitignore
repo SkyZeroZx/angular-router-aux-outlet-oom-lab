@@ -1,0 +1,6 @@
+evidence/
+node_modules/
+dist/
+.angular/
+*.log
+*.zip

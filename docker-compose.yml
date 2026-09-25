@@ -1,0 +1,83 @@
+services:
+  app:
+    build:
+      context: ./app
+      args:
+        ROUTER_PATCH: ${ROUTER_PATCH:-none}
+    # Pinned to Node's own default, so it is on the record that nothing was
+    # raised to make the request acceptable: both sizes fit it, proxy headers
+    # included.
+    command: ["node", "--max-old-space-size=${HEAP_MB:-128}", "--max-http-header-size=${MAX_HTTP_HEADER_SIZE:-16384}", "dist/router-oom-e2e/server/server.mjs"]
+    environment:
+      # Per-check delay of the async canMatch guard on /guard. Ignored by /shop.
+      CANMATCH_MS: ${CANMATCH_MS:-0}
+    ports:
+      - "127.0.0.1:4000:4000"
+    # Well above the V8 limit, so a kill is V8 reaching --max-old-space-size and
+    # not the kernel reaping the container. Checked via OOMKilled after a run.
+    mem_limit: ${CONTAINER_MEM_LIMIT:-2g}
+    restart: "no"
+    networks: [lab]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  nginx:
+    build: ./nginx
+    environment:
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      NGINX_ENVSUBST_FILTER: "^NGINX_LARGE_HEADER_BUFFER$"
+      # The AWS Elastic Load Balancer request line. Nginx's own default is 8k,
+      # which rejects the 16 KiB path outright.
+      NGINX_LARGE_HEADER_BUFFER: ${NGINX_LARGE_HEADER_BUFFER:-16k}
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: "no"
+    networks: [lab]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  candidate:
+    profiles: ["test"]
+    build: ./client
+    environment:
+      MODE: candidate
+      SHAPE: ${SHAPE:-shop}
+      OUTLETS: ${OUTLETS:-480}
+      QUERY_NAMES: ${QUERY_NAMES:-1377}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      HEAP_MB: ${HEAP_MB:-128}
+      CANMATCH_MS: ${CANMATCH_MS:-0}
+      TARGET_URL: ${TARGET_URL:-http://app:4000}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [lab]
+
+  control:
+    profiles: ["test"]
+    build: ./client
+    environment:
+      MODE: control
+      SHAPE: ${SHAPE:-shop}
+      OUTLETS: ${OUTLETS:-480}
+      QUERY_NAMES: ${QUERY_NAMES:-1377}
+      CONCURRENCY: ${CONCURRENCY:-1}
+      HEAP_MB: ${HEAP_MB:-128}
+      CANMATCH_MS: ${CANMATCH_MS:-0}
+      TARGET_URL: ${TARGET_URL:-http://app:4000}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [lab]
+
+networks:
+  lab: {}
