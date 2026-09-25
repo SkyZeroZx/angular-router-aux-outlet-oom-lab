@@ -24,13 +24,24 @@ function keyAt(index) {
   );
 }
 
-// "name:/()" is a named outlet holding an empty primary child group. The terser
-// "name:" does not work: the parser folds the outlets into one group and the
-// fan-out disappears.
+// "name:/()" is a named outlet holding an empty primary child group, and the
+// four characters after the name are all load-bearing. Measured against the
+// installed @angular/router with ROUTER_PATCH=count, 100 outlets:
+//
+//   name:/()   406 snapshots   the published spelling, 6 + 4*O
+//   name:/      12 snapshots   parses to one child per outlet, and fans out for none
+//   name:z      12 snapshots   same
+//   name:()     fails to parse (NG04010)
+//   name:        2 children for 4 outlets; the parser folds them into one group
+//
+// So a cheaper spelling is not available. ":/" and ":z" do give DefaultUrlSerializer
+// one child per outlet, which looks like a 2-byte-per-outlet saving until you count
+// snapshots: the empty "()" child group is what lets the empty-path route match an
+// outlet while consuming nothing, and without it recognition never fans out.
 function outlets(count) {
   return Array.from(
     { length: count },
-    (_, index) => `${index ? "//" : ""}${keyAt(index)}:/()`,
+    (_, index) => `${index && !process.env["NO_SEP"] ? "//" : ""}${keyAt(index)}:/()`,
   ).join("");
 }
 

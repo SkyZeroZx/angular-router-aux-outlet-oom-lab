@@ -13,8 +13,11 @@ cd "$(dirname "$0")/.."
 #   counts   what recognition actually builds, per arm and per empty-path depth,
 #            from a build instrumented only at createSnapshot().
 #   ablation stock against the shared-query-map edit, same bytes, same output.
+#   fuzz     splits one request-line budget between the two dimensions
 #   guard    the same shape behind an async canMatch guard, swept over the
 #            guard's per-check delay.
+#   fixcheck the candidate fix end to end: no OOM, no amplifier, same output
+#   gdepth   the guarded column by empty-path depth, through Nginx
 #   matrix   both shapes, both request-line sizes, four heaps, through Nginx.
 #
 # Every trial gets a brand new worker, and the worker's own command line is
@@ -318,6 +321,42 @@ ablation)
   build_app none
   ;;
 
+fuzz)
+  # Splits a fixed request-line budget between the two dimensions and asks which
+  # split peaks highest. The work is snapshots x per-snapshot map size: snapshots
+  # are linear in the outlet count, but the map size is a staircase in the name
+  # count, because V8 sizes the dictionary to the next power of two at or above
+  # twice the name count. So the efficient name counts are the SMALLEST on each
+  # step - anything above that pays URL bytes for capacity it already had.
+  #
+  # PAIRS is "outlets:names outlets:names ...", all at the same budget.
+  export HEAP_MB="${HEAP_MB:-256}" SHAPE="${SHAPE:-shop}" CANMATCH_MS=0
+  export SERVICES=app TARGET_URL=http://app:4000
+  PAIRS="${PAIRS:-480:1377 612:1025 611:1026 546:1200 680:900 512:1024}"
+  # Empty-path depth of the shape, for the derived snapshot count. Recognition
+  # builds 2(D+1) + 2*D*O, so a count hardcoded for one shape is wrong for the
+  # others the moment the arm is pointed at them.
+  case "$SHAPE" in
+  shop1) DEPTH=1 ;;
+  shop3) DEPTH=3 ;;
+  shop4) DEPTH=4 ;;
+  *) DEPTH=2 ;;
+  esac
+  echo "== fuzz | heap ${HEAP_MB} MiB | ${SHAPE} (D=${DEPTH}) | 1 request | ${TRIALS} fresh workers per pair =="
+  printf '%-9s %-7s %-7s %-11s %-14s %-10s %s\n' \
+    outlets names bytes "snapshots*" outcome "median ms" "median peak MiB"
+
+  for pair in $PAIRS; do
+    export OUTLETS="${pair%%:*}" QUERY_NAMES="${pair##*:}" MODE=candidate
+    bytes="$(path_bytes candidate)"
+    repeat candidate 1 "fuzz-${HEAP_MB}-${SHAPE}-o${OUTLETS}-q${QUERY_NAMES}"
+    printf '%-9s %-7s %-7s %-11s %-14s %-10s %s\n' \
+      "$OUTLETS" "$QUERY_NAMES" "$bytes" "$((2 * (DEPTH + 1) + 2 * DEPTH * OUTLETS))" \
+      "${REPEAT_FATAL}/${TRIALS} fatal" "$REPEAT_MS" "$REPEAT_PEAK"
+  done
+  echo "* derived as 2(D+1) + 2*D*O, not measured here; ROUTER_PATCH=count measures it."
+  ;;
+
 guard)
   # Fewer outlets here, so one request is not already fatal and concurrency is
   # the variable. The guard runs once per URL outlet, so its per-check delay
@@ -340,6 +379,79 @@ guard)
     trial control "$first" "evidence/guard-${ms}ms-control.log"
     [[ "$TRIAL_VERDICT" == healthy ]] || fail "Control was $TRIAL_VERDICT at ${ms} ms, x${first}."
     printf '%-10s %-18s %s\n' "${ms} ms" "$first" "${first}/${first} survived"
+  done
+  ;;
+
+fixcheck)
+  # The candidate fix, end to end. Four things have to hold at once: the payload
+  # that is fatal on stock survives, the payload that kills a 512 MiB worker on
+  # stock survives, the async canMatch amplifier is gone, and the rendered page is
+  # byte-identical to stock. The last one is what separates a fix from a change in
+  # behaviour, so it is checked on every arm rather than asserted once.
+  export SHAPE=shop CANMATCH_MS=0 SERVICES=app TARGET_URL=http://app:4000 FOLLOW=1
+  echo "== fixcheck | ROUTER_PATCH=fix | ${TRIALS} fresh workers per arm =="
+  printf '%-34s %-14s %-10s %-10s %s\n' arm outcome "median ms" "peak MiB" "body sha256"
+
+  build_app fix
+
+  # 1. The headline payload at the heap where stock is 5/5 fatal.
+  export HEAP_MB=128 OUTLETS=480 QUERY_NAMES=1377 MODE=candidate
+  unset NO_SEP
+  repeat candidate 1 "fixcheck-8k-128"
+  printf '%-34s %-14s %-10s %-10s %s\n' "8k candidate, 128 MiB" \
+    "${REPEAT_FATAL}/${TRIALS} fatal" "$REPEAT_MS" "$REPEAT_PEAK" "${REPEAT_SHA:0:16}"
+
+  # 2. The optimised payload at the heap it kills on stock.
+  export HEAP_MB=512 OUTLETS=1356 QUERY_NAMES=2732 NO_SEP=1
+  repeat candidate 1 "fixcheck-16k-512"
+  printf '%-34s %-14s %-10s %-10s %s\n' "16k optimised, 512 MiB" \
+    "${REPEAT_FATAL}/${TRIALS} fatal" "$REPEAT_MS" "$REPEAT_PEAK" "${REPEAT_SHA:0:16}"
+  unset NO_SEP
+
+  # 3. The async canMatch amplifier, at the concurrency that kills on stock. The
+  #    guarded route still builds a pre-match snapshot - it has a guard - but the
+  #    snapshot now shares one frozen map instead of copying it, so there should be
+  #    nothing left to retain across the await.
+  export HEAP_MB=128 SHAPE=guard OUTLETS=120 QUERY_NAMES=1377
+  repeat candidate 4 "fixcheck-guard-x4"
+  printf '%-34s %-14s %-10s %-10s %s\n' "guard x4, 128 MiB" \
+    "${REPEAT_FATAL}/${TRIALS} fatal" "$REPEAT_MS" "$REPEAT_PEAK" "${REPEAT_SHA:0:16}"
+
+  # 4. What the fix removed, counted on the fixed build.
+  build_app fix-count
+  export HEAP_MB=1024 SHAPE=shop OUTLETS=480 QUERY_NAMES=1377
+  trial candidate 1 evidence/fixcheck-counts.log
+  line="$(grep -o '{"snapshots":[0-9]*,"queryKeysCopied":[0-9]*}' evidence/fixcheck-counts.log | tail -1 || true)"
+  echo "counts on the fixed build: ${line:-none}  (stock: 1926 / 2652102)"
+
+  build_app none
+  ;;
+
+gdepth)
+  # The guarded column by empty-path depth, through Nginx so it is comparable
+  # cell for cell with the matrix arm. The matrix already covers depth 2; this
+  # adds 3 and 4, which is the half of the table depth otherwise never reaches.
+  # The guard stays on the outer level in every shape, so depth is the only thing
+  # that varies. Payloads are the published ones, separator included, for the
+  # same reason.
+  export SERVICES="app nginx" TARGET_URL=http://nginx:8080 CANMATCH_MS=0
+  MAX="${MAX_CONCURRENCY:-6}"
+  echo "== gdepth | through Nginx | guarded column by depth =="
+  printf '%-6s %-8s %-7s %s\n' size shape heap "requests to OOM"
+
+  for size in 8k 16k; do
+    case "$size" in
+    8k) export OUTLETS=480 QUERY_NAMES=1377 ;;
+    16k) export OUTLETS=1020 QUERY_NAMES=2726 ;;
+    esac
+    for shape in ${GUARD_SHAPES:-guard3 guard4}; do
+      export SHAPE="$shape"
+      for heap in ${HEAPS:-256 512 1024}; do
+        export HEAP_MB="$heap"
+        first="$(first_oom "gdepth-${size}-${shape}-${heap}" "$MAX")"
+        printf '%-6s %-8s %-7s %s\n' "$size" "$shape" "${heap}M" "$first"
+      done
+    done
   done
   ;;
 
@@ -374,7 +486,7 @@ matrix)
   ;;
 
 *)
-  echo "Usage: $0 [shop|arms|diff|counts|ablation|guard|matrix]" >&2
+  echo "Usage: $0 [shop|arms|diff|counts|ablation|fuzz|fixcheck|guard|gdepth|matrix]" >&2
   exit 2
   ;;
 esac
