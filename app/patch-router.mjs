@@ -5,8 +5,15 @@
 //   share-query  create and freeze the query map once per recognition attempt
 //                and share it, instead of copying it into every snapshot
 //   count        report how many snapshots a request builds and how many query
-//                properties they copy, one line per request in the app log
+//                properties they copy, one line per burst in the app log
+//
+// And the candidate fix itself, which is not proof-only. See router-fix.mjs.
+//
+//   fix          the 12-site fix: shared frozen query map, no pre-match snapshot
+//                without a canMatch, shared inherited params and lazy resolve
+//   fix-count    the fix with the counters on top, to show what it removed
 import { readFileSync, writeFileSync } from "node:fs";
+import { applyFix, FIXED_SNAPSHOT_ANCHOR } from "./router-fix.mjs";
 
 const FILE = "node_modules/@angular/router/fesm2022/_router-chunk.mjs";
 
@@ -37,13 +44,50 @@ const PATCHES = {
 ${ANCHOR}`,
 };
 
+const MODES = [...Object.keys(PATCHES), "fix", "fix-count"];
+// On the stock bundle every snapshot copies the map, so counting keys per
+// snapshot is counting copies. After the fix the map is copied once per
+// recognition attempt, so the snapshot counter and the copy counter have to sit
+// in different places or the number would be keys REFERENCED, not copied.
+const countersFixedSnapshot = "    globalThis.__s = (globalThis.__s ?? 0) + 1;\n    clearTimeout(globalThis.__t);\n    globalThis.__t = setTimeout(() => {\n      console.log(JSON.stringify(\n        { snapshots: globalThis.__s, queryKeysCopied: globalThis.__k ?? 0 }));\n      globalThis.__s = 0;\n      globalThis.__k = 0;\n    }, 250);\n";
+
+// The one place the fix actually spreads the map.
+const FIXED_COPY_ANCHOR = "      this.frozenQueryParamsSource = this.urlTree.queryParams;";
+const countersFixedCopy = [
+  FIXED_COPY_ANCHOR,
+  "      globalThis.__k = (globalThis.__k ?? 0) + Object.keys(this.urlTree.queryParams).length;",
+].join("\n");
+
 const mode = process.argv[2] ?? "none";
 if (mode === "none") process.exit(0);
-if (!Object.hasOwn(PATCHES, mode)) {
-  throw new Error(`Unsupported ROUTER_PATCH=${mode}. Expected none, ${Object.keys(PATCHES).join(" or ")}.`);
+if (!MODES.includes(mode)) {
+  throw new Error(`Unsupported ROUTER_PATCH=${mode}. Expected none or one of ${MODES.join(", ")}.`);
 }
 
 const source = readFileSync(FILE, "utf8");
+
+if (mode === "fix" || mode === "fix-count") {
+  let out = applyFix(source);
+  if (mode === "fix-count") {
+    // The fix rewrote createSnapshot, so the counters anchor on its new shape and
+    // read the shared map rather than urlTree.queryParams.
+    if (!out.includes(FIXED_SNAPSHOT_ANCHOR)) {
+      throw new Error("the fixed createSnapshot() is not where router-fix.mjs said it would be.");
+    }
+    out = out.replace(
+      FIXED_SNAPSHOT_ANCHOR,
+      `${countersFixedSnapshot}${FIXED_SNAPSHOT_ANCHOR}`,
+    );
+    if (!out.includes(FIXED_COPY_ANCHOR)) {
+      throw new Error("the fix's queryParams getter is not where router-fix.mjs said it would be.");
+    }
+    out = out.replace(FIXED_COPY_ANCHOR, countersFixedCopy);
+  }
+  writeFileSync(FILE, out);
+  console.log(`applied ROUTER_PATCH=${mode}`);
+  process.exit(0);
+}
+
 if (!source.includes(ANCHOR)) {
   throw new Error("createSnapshot() no longer matches the expected source; the anchor needs updating.");
 }
