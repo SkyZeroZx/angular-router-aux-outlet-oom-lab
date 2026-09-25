@@ -26,8 +26,14 @@ const PATCHES = {
     globalThis.__s = (globalThis.__s ?? 0) + 1;
     globalThis.__k = (globalThis.__k ?? 0) + this.__n;
     clearTimeout(globalThis.__t);
-    globalThis.__t = setTimeout(() => console.log(JSON.stringify(
-      { snapshots: globalThis.__s, queryKeysCopied: globalThis.__k })), 250);
+    globalThis.__t = setTimeout(() => {
+      console.log(JSON.stringify(
+        { snapshots: globalThis.__s, queryKeysCopied: globalThis.__k }));
+      // Reset, so each line is the burst that produced it rather than every
+      // request the worker has served since it booted.
+      globalThis.__s = 0;
+      globalThis.__k = 0;
+    }, 250);
 ${ANCHOR}`,
 };
 

@@ -31,6 +31,13 @@ export const routes: Routes = [
     ],
   },
 
+  // One empty-path level instead of two, so the depth term in the snapshot
+  // count is measured against the same request rather than asserted.
+  {
+    path: "shop1",
+    children: [{ path: "", component: ShopPage }],
+  },
+
   // The same shape with an async canMatch guard on the outer empty-path level.
   // Concurrent requests overlap here, so their peaks add up.
   {
@@ -45,7 +52,7 @@ export const routes: Routes = [
   },
 
   // An ordinary 404 page. Without a catch-all the SSR route tree answers 404
-  // for anything but "/shop" and "/guard", and the URL never reaches Router
-  // recognition.
+  // for anything but the paths above, and the URL never reaches Router
+  // recognition. See README, "It needs a catch-all route".
   { path: "**", component: NotFound },
 ];

@@ -28,10 +28,12 @@ services:
     build: ./nginx
     environment:
       NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
-      NGINX_ENVSUBST_FILTER: "^NGINX_LARGE_HEADER_BUFFER$"
+      NGINX_ENVSUBST_FILTER: "^NGINX_(LARGE_HEADER_BUFFER|PROXY_BUFFER)$"
       # The AWS Elastic Load Balancer request line. Nginx's own default is 8k,
       # which rejects the 16 KiB path outright.
       NGINX_LARGE_HEADER_BUFFER: ${NGINX_LARGE_HEADER_BUFFER:-16k}
+      # Big enough for the 302 Location the app returns, which echoes the URL.
+      NGINX_PROXY_BUFFER: ${NGINX_PROXY_BUFFER:-32k}
     depends_on:
       app:
         condition: service_healthy
@@ -57,6 +59,10 @@ services:
       HEAP_MB: ${HEAP_MB:-128}
       CANMATCH_MS: ${CANMATCH_MS:-0}
       TARGET_URL: ${TARGET_URL:-http://app:4000}
+      # Follow the redirect to the rendered page, so the arms can be compared on
+      # their output. Off by default: a second request would change what the
+      # concurrency arms measure.
+      FOLLOW: ${FOLLOW:-0}
     depends_on:
       app:
         condition: service_healthy
@@ -74,6 +80,10 @@ services:
       HEAP_MB: ${HEAP_MB:-128}
       CANMATCH_MS: ${CANMATCH_MS:-0}
       TARGET_URL: ${TARGET_URL:-http://app:4000}
+      # Follow the redirect to the rendered page, so the arms can be compared on
+      # their output. Off by default: a second request would change what the
+      # concurrency arms measure.
+      FOLLOW: ${FOLLOW:-0}
     depends_on:
       app:
         condition: service_healthy

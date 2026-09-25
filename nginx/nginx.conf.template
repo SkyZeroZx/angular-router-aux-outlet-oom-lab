@@ -10,8 +10,7 @@ http {
   server_tokens off;
 
   # Sized to the AWS Elastic Load Balancer request line. Nginx's own default is
-  # 8k, which rejects the 16 KiB path outright. Everything else is left at
-  # Nginx's defaults.
+  # 8k, which rejects the 16 KiB path outright.
   large_client_header_buffers 4 ${NGINX_LARGE_HEADER_BUFFER};
 
   upstream angular_ssr {
@@ -37,6 +36,16 @@ http {
       proxy_set_header Host $host;
       proxy_set_header X-Forwarded-For $remote_addr;
       proxy_set_header X-Forwarded-Proto $scheme;
+
+      # Recognition ends on a redirect to the merged URL, so the response carries
+      # a Location as long as the request line. Nginx's default response-header
+      # buffer is one page, and anything over it is answered 502 with "upstream
+      # sent too big header" instead of the app's own status. This is the second
+      # and last setting here that is not an Nginx default, and it is on the
+      # response path: it changes what the client sees, never what the server is
+      # willing to accept.
+      proxy_buffer_size ${NGINX_PROXY_BUFFER};
+      proxy_buffers 4 ${NGINX_PROXY_BUFFER};
 
       proxy_connect_timeout 5s;
       proxy_send_timeout 300s;
