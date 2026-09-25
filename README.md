@@ -9,7 +9,7 @@ Control:   /shop/(a:/()//b:/()//...)?a&a&a&a&...   480 outlets,     2 names
 ```
 
 Both URLs are the same 7,873 bytes, declare the same outlets and carry the same
-query pairs. They differ only in how many *distinct* names the query map ends up
+query pairs. They differ only in how many _distinct_ names the query map ends up
 with. One candidate request exhausts a 128 MiB SSR worker; the control answers
 and the worker stays up.
 
@@ -41,6 +41,8 @@ export const routes: Routes = [
 serializers. That is what separates this from the earlier query-parameter
 report, where the cost was substantially application-driven.
 
+### It needs a catch-all route
+
 The catch-all is a real precondition rather than decoration. `@angular/ssr`
 matches its own compile-time `RouteTree` before the Router runs, and splits the
 path on `/`, so `/shop/(a:/())` arrives as `['shop', '(a:', '())']` and misses.
@@ -54,7 +56,7 @@ application has a 404 page.
 `@angular/router` 22.2.0, `fesm2022/_router-chunk.mjs`:
 
 - `processChildren()` recognises every child outlet, then calls
-  `mergeEmptyPathMatches(children)` *after* the loop. The merge keeps the final
+  `mergeEmptyPathMatches(children)` _after_ the loop. The merge keeps the final
   route state small, but it cannot give back what building the duplicates cost.
 - `match()`, line 2905, lets an empty-path route match while consuming nothing,
   including for outlets it was not configured for. One `{ path: "" }` matches
@@ -96,12 +98,34 @@ Each trial also checks the worker's own command line before measuring anything.
 A container reused at the wrong heap looks exactly like a result, which is how
 measurements go quietly wrong.
 
+Every table in this file is one arm of the same script, and every arm writes its
+own logs into `evidence/`. `TRIALS` sets how many fresh workers each repeated
+arm uses, and defaults to five.
+
+```bash
+./scripts/validate.sh arms      # both dimensions, then each alone, 128 MiB
+./scripts/validate.sh diff      # the same four arms where none of them die
+./scripts/validate.sh counts    # snapshots and query copies, per depth
+./scripts/validate.sh ablation  # stock against the shared-query-map edit
+./scripts/validate.sh guard     # the async canMatch sweep
+./scripts/validate.sh matrix    # four heaps and both sizes, through Nginx
+```
+
+Peak memory is the container's own monotonic cgroup counter polled at 20 Hz, so
+on an arm that dies it is a floor rather than the peak: the container takes the
+counter with it.
+
+Recognition ends on a redirect to the merged URL, so the rendered page is one
+hop past the measured request. `FOLLOW=1` takes that hop and hashes what comes
+back, which is how the arms are compared on their output. It is off by default,
+because a second request per arm would change what the concurrency arms measure.
+
 ## The async canMatch guard
 
 `/guard` is the same route shape with an async `canMatch` on the outer
 empty-path level. `matchWithChecks()` builds its pre-match snapshot and then
 awaits the guards with that snapshot, and every parent recognition frame, still
-live. That is the one hook that yields the event loop from *inside* recognition,
+live. That is the one hook that yields the event loop from _inside_ recognition,
 so concurrent requests overlap their speculative trees and the peaks add up.
 
 ```bash
@@ -135,24 +159,29 @@ uses 120.
 
 ## Through Nginx
 
-Both request-line sizes, four heaps, with and without the guard, behind Nginx
-with `large_client_header_buffers 4 16k` — the AWS Elastic Load Balancer request
-line, and its only setting that is not an Nginx default.
+Both request-line sizes, four heaps, with and without the guard, behind Nginx.
+Two settings there are not Nginx defaults. `large_client_header_buffers 4 16k`
+is the AWS Elastic Load Balancer request line, on the request path. The other is
+`proxy_buffer_size`: recognition ends on a redirect to the merged URL, so the
+response carries a `Location` as long as the request line, and at Nginx's
+one-page default every proxied response comes back 502 with "upstream sent too
+big header" instead of the app's own status. That is on the response path — it
+changes what the client is shown, never what the server accepts.
 
 ```bash
 ./scripts/validate.sh matrix
 ```
 
-| Request line | Heap | No guard | Async canMatch |
-| -----------: | ---: | -----------: | -------------: |
-| 7,888 B | 128 MiB | **1** | **1** |
-| | 256 MiB | survives 16 | **2** |
-| | 512 MiB | survives 16 | **5** |
-| | 1,024 MiB | survives 16 | between 6 and 16 |
-| 16,255 B | 128 MiB | **1** | **1** |
-| | 256 MiB | **1** | **1** |
-| | 512 MiB | survives 16 | **2** |
-| | 1,024 MiB | survives 16 | **4** |
+| Request line |      Heap |    No guard |   Async canMatch |
+| -----------: | --------: | ----------: | ---------------: |
+|      7,888 B |   128 MiB |       **1** |            **1** |
+|              |   256 MiB | survives 16 |            **2** |
+|              |   512 MiB | survives 16 |            **5** |
+|              | 1,024 MiB | survives 16 | between 6 and 16 |
+|     16,255 B |   128 MiB |       **1** |            **1** |
+|              |   256 MiB |       **1** |            **1** |
+|              |   512 MiB | survives 16 |            **2** |
+|              | 1,024 MiB | survives 16 |            **4** |
 
 A bare number is the lowest concurrency that lost the worker. `survives 16` means
 sixteen concurrent requests left it healthy — the ramp probes its ceiling first,
@@ -197,8 +226,11 @@ docker inspect "$(docker compose ps -a -q app)" --format '{{.State.OOMKilled}}'
 ```
 
 Expected: a V8 heap error and `false`. Swap `candidate` for `control` to send the
-byte-identical harmless request. `SHAPE=guard` targets the guarded route,
-`OUTLETS` and `QUERY_NAMES` size the URL, and `CONCURRENCY` sends more than one.
+byte-identical harmless request. `SHAPE` picks the route shape — `shop`, `shop1`
+for one empty-path level instead of two, and `guard` for the async
+`canMatch` — `OUTLETS` and `QUERY_NAMES`
+size the URL, `CONCURRENCY` sends more than one, and `FOLLOW=1` follows the
+redirect to the rendered page.
 
 The app is on `127.0.0.1:4000` and Nginx on `127.0.0.1:8080`.
 
@@ -211,10 +243,12 @@ default is `none`, which is stock and is what every number above uses.
 ROUTER_PATCH=count docker compose up -d --build --wait app
 ```
 
-Reports what recognition actually built, one line per request in the app log:
+Reports what recognition actually built, one line per burst in the app log,
+reset after each line so it is the request that produced it rather than every
+request since the worker booted:
 
 ```json
-{"snapshots":1926,"queryKeysCopied":2652102}
+{ "snapshots": 1926, "queryKeysCopied": 2652102 }
 ```
 
 ```bash
