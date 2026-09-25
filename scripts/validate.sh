@@ -494,6 +494,35 @@ aux)
   unset MATRIX_CLIFF
   ;;
 
+auxmatrix)
+  # The matrix-parameter shape on the same axes as the query one: both request
+  # line sizes, four heaps, with and without the async canMatch, through Nginx.
+  export SERVICES="app nginx" TARGET_URL=http://nginx:8080 CANMATCH_MS=0
+  export QUERY_NAMES=0 NO_SEP=1 MODE=candidate
+  MAX="${MAX_CONCURRENCY:-6}"
+  echo "== auxmatrix | through Nginx =="
+  printf '%-6s %-7s %-9s %s
+' size heap canMatch "requests to OOM"
+
+  for size in 8k 16k; do
+    case "$size" in
+    8k) export OUTLETS=670 MATRIX_NAMES=1366 ;;
+    16k) export OUTLETS=1356 MATRIX_NAMES=2732 ;;
+    esac
+    for heap in 128 256 512 1024; do
+      export HEAP_MB="$heap"
+      for guard in off on; do
+        case "$guard" in
+        off) export SHAPE=aux ;;
+        on) export SHAPE=auxguard ;;
+        esac
+        printf '%-6s %-7s %-9s %s
+' "$size" "${heap}M" "$guard"           "$(first_oom "auxmatrix-${size}-${heap}-${guard}" "$MAX")"
+      done
+    done
+  done
+  ;;
+
 gdepth)
   # The guarded column by empty-path depth, through Nginx so it is comparable
   # cell for cell with the matrix arm. The matrix already covers depth 2; this
@@ -553,7 +582,7 @@ matrix)
   ;;
 
 *)
-  echo "Usage: $0 [shop|arms|aux|diff|counts|ablation|fuzz|fixcheck|guard|gdepth|matrix]" >&2
+  echo "Usage: $0 [shop|arms|aux|auxmatrix|diff|counts|ablation|fuzz|fixcheck|guard|gdepth|matrix]" >&2
   exit 2
   ;;
 esac

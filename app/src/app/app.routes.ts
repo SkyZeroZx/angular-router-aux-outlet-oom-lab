@@ -173,6 +173,23 @@ export const routes: Routes = [
     ],
   },
 
+  // The aux shape with an async canMatch on the pathless layer, so the matrix
+  // column has the same two halves the query column has.
+  {
+    path: "auxguard",
+    children: [
+      {
+        path: "",
+        component: AuxLayout,
+        canMatch: [slowMatch],
+        children: [
+          { path: "", component: ShopPage },
+          { path: "", outlet: "modal", component: ModalPage },
+        ],
+      },
+    ],
+  },
+
   // An ordinary 404 page. Without a catch-all the SSR route tree answers 404
   // for anything but the paths above, and the URL never reaches Router
   // recognition. See README, "It needs a catch-all route".

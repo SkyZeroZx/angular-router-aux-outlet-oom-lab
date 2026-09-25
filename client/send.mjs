@@ -26,7 +26,7 @@ const matrixNames = Number(process.env.MATRIX_NAMES ?? "0");
 // concurrency arms measure.
 const follow = process.env.FOLLOW === "1";
 
-const SHAPES = ["shop", "shop1", "shop3", "shop4", "layout", "aux", "guard", "guard3", "guard4"];
+const SHAPES = ["shop", "shop1", "shop3", "shop4", "layout", "aux", "auxguard", "guard", "guard3", "guard4"];
 if (!SHAPES.includes(shape)) {
   throw new Error(`Unsupported SHAPE=${shape}. Expected one of ${SHAPES.join(", ")}.`);
 }

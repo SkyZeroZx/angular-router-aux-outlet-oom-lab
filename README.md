@@ -61,6 +61,7 @@ default.
 ./scripts/validate.sh diff      # the same four arms where none of them die
 ./scripts/validate.sh counts    # snapshots and query copies, per depth
 ./scripts/validate.sh aux       # matrix-param width against a named modal outlet
+./scripts/validate.sh auxmatrix # the matrix shape on the query grid's axes
 ./scripts/validate.sh ablation  # stock against the shared-query-map edit
 ./scripts/validate.sh fuzz      # splits one request-line budget between the two
 ./scripts/validate.sh guard     # the async canMatch sweep
@@ -320,6 +321,28 @@ Largest heap one request kills:
 | 128 MiB | **3/3 fatal** |
 | 256 MiB | **3/3 fatal** |
 | 512 MiB | 0/3 fatal, 356 MiB peak |
+
+On the same axes as the query grid, through the same Nginx, lowest concurrency that
+loses the worker:
+
+```bash
+./scripts/validate.sh auxmatrix
+```
+
+| Request line | Heap | No guard | Async canMatch |
+| -----------: | ---: | -------: | -------------: |
+| 8,036 B | 128 MiB | **1** | **1** |
+| | 256 MiB | **1** | **1** |
+| | 512 MiB | survives 16 | **2** |
+| | 1,024 MiB | survives 16 | **5** |
+| 16,250 B | 128 MiB | **1** | **1** |
+| | 256 MiB | **1** | **1** |
+| | 512 MiB | **1** | **1** |
+| | 1,024 MiB | survives 16 | **2** |
+
+Against the query grid that is worse in 6 of the 16 cells and never better. Two
+cells matter. `16 KB / 512 MiB / no guard` goes from `survives 16` to one request.
+And 1 GiB with a guard falls from four requests to two.
 
 This shape is stronger than the query one for the same budget. 8,021 bytes kills
 256 MiB where the 7,873-byte query payload kills 128, because six snapshots per
