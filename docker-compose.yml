@@ -53,6 +53,9 @@ services:
       SHAPE: ${SHAPE:-shop}
       OUTLETS: ${OUTLETS:-480}
       QUERY_NAMES: ${QUERY_NAMES:-1377}
+      NAMES: ${NAMES:-alpha}
+      STRIDE: ${STRIDE:-17}
+      PATH_BYTES: ${PATH_BYTES:-0}
       CONCURRENCY: ${CONCURRENCY:-1}
       HEAP_MB: ${HEAP_MB:-128}
       CANMATCH_MS: ${CANMATCH_MS:-0}
@@ -70,6 +73,9 @@ services:
       SHAPE: ${SHAPE:-shop}
       OUTLETS: ${OUTLETS:-480}
       QUERY_NAMES: ${QUERY_NAMES:-1377}
+      NAMES: ${NAMES:-alpha}
+      STRIDE: ${STRIDE:-17}
+      PATH_BYTES: ${PATH_BYTES:-0}
       CONCURRENCY: ${CONCURRENCY:-1}
       HEAP_MB: ${HEAP_MB:-128}
       CANMATCH_MS: ${CANMATCH_MS:-0}

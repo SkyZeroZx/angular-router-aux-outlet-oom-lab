@@ -112,6 +112,28 @@ first_oom() {
   echo "between $max and $probe"
 }
 
+# Bisects the smallest outlet count that still loses the worker, at a fixed
+# request-line budget so the query widens as the outlets shrink. Echoes the
+# count, or "" when even the ceiling survives.
+fewest_outlets() {
+  local tag="$1" low=40 high="$2" verdict best=""
+  export OUTLETS="$high"
+  verdict="$(trial candidate 1 "evidence/${tag}-o${high}.log")"
+  [[ "$verdict" == fatal ]] || { echo ""; return; }
+  best="$high"
+  while ((high - low > 8)); do
+    local mid=$(((low + high) / 2))
+    export OUTLETS="$mid"
+    verdict="$(trial candidate 1 "evidence/${tag}-o${mid}.log")"
+    case "$verdict" in
+    fatal) high="$mid"; best="$mid" ;;
+    healthy) low="$mid" ;;
+    *) fail "${tag} o${mid}: ${verdict}." ;;
+    esac
+  done
+  echo "$best"
+}
+
 mkdir -p evidence
 docker compose build app candidate control nginx >/dev/null
 
@@ -186,8 +208,38 @@ matrix)
   done
   ;;
 
+sharpen)
+  # Does encoding the query names as spaced integers, so they land in a V8
+  # elements store instead of a NameDictionary, buy the attacker anything on the
+  # real payload? Compared at an equal request line, which is the constraint that
+  # matters. Both arms of the lab, alpha against numeric.
+  export SERVICES=app TARGET_URL=http://app:4000 HEAP_MB=128 PATH_BYTES=7873
+  echo "== sharpen | heap ${HEAP_MB} MiB | request line $((PATH_BYTES + 15)) B =="
+  printf '%-9s %-8s %s
+' "names" "stride" "fewest outlets that kill"
+  for names in alpha numeric; do
+    export NAMES="$names" SHAPE=shop CANMATCH_MS=0
+    fewest="$(fewest_outlets "sharpen-shop-${names}" 480)"
+    printf '%-9s %-8s %s
+' "$names" "$([[ $names == numeric ]] && echo "${STRIDE:-17}" || echo -)" "${fewest:-survives 480}"
+  done
+
+  echo
+  export SHAPE=guard OUTLETS=120 PATH_BYTES=4993
+  MAX="${MAX_CONCURRENCY:-6}"
+  echo "== sharpen | guard | ${OUTLETS} outlets | request line $((PATH_BYTES + 15)) B =="
+  printf '%-9s %-8s %s
+' "names" "stride" "requests to OOM"
+  for names in alpha numeric; do
+    export NAMES="$names"
+    first="$(first_oom "sharpen-guard-${names}" "$MAX")"
+    printf '%-9s %-8s %s
+' "$names" "$([[ $names == numeric ]] && echo "${STRIDE:-17}" || echo -)" "$first"
+  done
+  ;;
+
 *)
-  echo "Usage: $0 [shop|guard|matrix]" >&2
+  echo "Usage: $0 [shop|guard|matrix|sharpen]" >&2
   exit 2
   ;;
 esac

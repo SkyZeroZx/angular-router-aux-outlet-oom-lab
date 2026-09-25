@@ -1,5 +1,5 @@
 import http from "node:http";
-import { buildTarget } from "./workloads.mjs";
+import { buildTarget, fitQueryNames } from "./workloads.mjs";
 
 const target = new URL(process.env.TARGET_URL ?? "http://127.0.0.1:4000");
 const REQUEST_TIMEOUT_MS = 300_000;
@@ -10,16 +10,29 @@ const shape = process.env.SHAPE ?? "shop";
 const mode = process.env.MODE ?? "candidate";
 const concurrency = Number(process.env.CONCURRENCY ?? "1");
 const outletCount = Number(process.env.OUTLETS ?? "480");
-const queryNames = Number(process.env.QUERY_NAMES ?? "1377");
+// alpha names go into a V8 NameDictionary; numeric ones are array indices and
+// land in an elements store sized to the largest index. STRIDE spaces them.
+const nameMode = process.env.NAMES ?? "alpha";
+const stride = Number(process.env.STRIDE ?? "17");
+// PATH_BYTES sizes the query to fill a byte budget, which is the only fair way
+// to compare two name encodings: the attacker is limited by the request line,
+// not by how many names fit in it.
+const budget = Number(process.env.PATH_BYTES ?? "0");
+const queryNames = budget
+  ? fitQueryNames({ shape, outletCount, nameMode, stride, budget })
+  : Number(process.env.QUERY_NAMES ?? "1377");
 
 if (!["shop", "guard"].includes(shape)) {
   throw new Error(`Unsupported SHAPE=${shape}. Expected "shop" or "guard".`);
+}
+if (!["alpha", "numeric"].includes(nameMode)) {
+  throw new Error(`Unsupported NAMES=${nameMode}. Expected "alpha" or "numeric".`);
 }
 if (!["candidate", "control"].includes(mode)) {
   throw new Error(`Unsupported MODE=${mode}. Expected "candidate" or "control".`);
 }
 
-const path = buildTarget({ shape, mode, outletCount, queryNames });
+const path = buildTarget({ shape, mode, outletCount, queryNames, nameMode, stride });
 const pathBytes = Buffer.byteLength(path);
 
 console.log(
@@ -29,6 +42,8 @@ console.log(
     concurrency,
     outlets: outletCount,
     queryNames,
+    nameMode,
+    ...(nameMode === "numeric" ? { stride } : {}),
     distinctQueryNames: mode === "candidate" ? queryNames : 2,
     pathBytes,
     // Node's own default header budget is 16 KiB, so this needs no tuning.
