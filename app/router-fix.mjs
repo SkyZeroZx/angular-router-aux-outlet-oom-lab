@@ -1,40 +1,45 @@
-// The candidate fix for the auxiliary-outlet recognition blow-up, as edits to
+// The candidate fix from the validation task, Appendix A:
+// `fix(router): do not copy URL-sized objects into every route snapshot`, as edits to
 // @angular/router's compiled FESM bundle.
 //
 //   node router-fix.mjs node_modules/@angular/router/fesm2022/_router-chunk.mjs
 //
-// Every edit must match exactly once or the script exits non-zero without
-// writing, so a bundle of a different shape fails loudly instead of silently
-// half-patching. Verified against @angular/router 22.2.0 as published on npm:
-// all 12 sites match once.
+// Every edit must match exactly once or the script exits non-zero without writing,
+// so a bundle of a different shape fails loudly instead of silently half-patching.
+// Not taken from the GitHub PR page: if the two ever diverge this file follows the
+// Appendix. Verified against @angular/router 22.2.0 as published on npm: all seven sites
+// match once.
 //
-// Three things are going on, and only the first is needed to stop the OOM:
+// The Appendix makes three changes. This file is those three and nothing else, because
+// an earlier version of it also deferred the pre-match snapshot behind a thunk,
+// which halves the snapshot count and is NOT part of the PR. Measuring a superset
+// and reporting it as the PR is how a wrong conclusion gets published.
 //
-//   Shared frozen query map  (edits 7, 8, 9, 11a)
+//   Shared frozen query map
 //     createSnapshot() froze a fresh copy of the whole URL-global query map into
 //     every snapshot. The Recognizer now owns one frozen object per recognition
-//     attempt and hands the same reference to every snapshot. The memo is keyed
-//     on urlTree.queryParams identity, so a redirect that replaces the UrlTree
-//     gets a new object rather than a stale one.
+//     attempt and hands the same reference to every snapshot. The memo is keyed on
+//     urlTree.queryParams identity, so a redirect that replaces the UrlTree gets a
+//     new object rather than a stale one.
 //
-//   No pre-match snapshot without a canMatch  (edits 3, 4, 5, 6, 10)
-//     matchWithChecks() built a pre-match snapshot per route attempt before it
-//     knew whether the route had any guard to hand it to. The snapshot becomes a
-//     thunk that runCanMatchGuards() and getRedirectResult() call only when they
-//     actually have a guard or a RedirectFunction. This halves the snapshot count
-//     and, for routes that DO have an async canMatch, removes the retention that
-//     makes concurrency a lever.
+//   Shared inherited params and data
+//     getInherited() copied {...parent.params, ...route.params} per snapshot, so
+//     matrix parameters on a consumed segment cost the product of their width and
+//     the number of routes matched. It now returns the parent's already-frozen
+//     object when the child contributes nothing of its own.
 //
-//   Inherited params and data shared, resolve made lazy  (edits 1, 2, 11b)
-//     getInherited() built three spread objects per snapshot. It now returns the
-//     parent's already-frozen object when the child contributes nothing, and
-//     builds `resolve` behind a getter, which createSnapshot() never reads. This
-//     closes the same shape driven by a segment's matrix parameters rather than
-//     the query string.
+//   Lazy resolve
+//     getInherited() also built a four-way spread for `resolve` that
+//     createSnapshot() never reads. It is now a getter, built on first read.
+//
+// One knowing difference from the Appendix: it declares its helper inside getInherited so
+// the router bundle's symbol golden stays untouched. That golden does not exist for
+// a FESM patch, so the helper sits at module scope here as isEmptyObject. Same
+// behaviour; it would fail the Appendix's own gate D and nothing else.
 import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 
 export const FIX_EDITS = [
-  // 1. Add the isEmptyObject helper next to getDataKeys.
+  // 1. The helper, which the PR declares inside getInherited.
   [
     `function getDataKeys(obj) {
   return [...Object.keys(obj), ...Object.getOwnPropertySymbols(obj)];
@@ -144,54 +149,7 @@ function isEmptyObject(obj) {
   };`,
   ],
 
-  // 3. runCanMatchGuards: take a thunk, call it only when the route has a canMatch guard.
-  [
-    `function runCanMatchGuards(injector, route, segments, urlSerializer, currentSnapshot, abortSignal) {
-  const canMatch = route.canMatch;
-  if (!canMatch || canMatch.length === 0) return of(true);
-  const canMatchObservables`,
-    `function runCanMatchGuards(injector, route, segments, urlSerializer, getCurrentSnapshot, abortSignal) {
-  const canMatch = route.canMatch;
-  if (!canMatch || canMatch.length === 0) return of(true);
-  const currentSnapshot = getCurrentSnapshot();
-  const canMatchObservables`,
-  ],
-
-  // 4. applyRedirectCommands: forward the thunk.
-  [
-    `  async applyRedirectCommands(segments, redirectTo, posParams, currentSnapshot, injector) {
-    const redirect = await getRedirectResult(redirectTo, currentSnapshot, injector);`,
-    `  async applyRedirectCommands(segments, redirectTo, posParams, getCurrentSnapshot, injector) {
-    const redirect = await getRedirectResult(redirectTo, getCurrentSnapshot, injector);`,
-  ],
-
-  // 5. getRedirectResult: build the snapshot only for a RedirectFunction.
-  [
-    `function getRedirectResult(redirectTo, currentSnapshot, injector) {
-  if (typeof redirectTo === 'string') {
-    return Promise.resolve(redirectTo);
-  }
-  const redirectToFn = redirectTo;
-  return firstValueFrom(`,
-    `function getRedirectResult(redirectTo, getCurrentSnapshot, injector) {
-  if (typeof redirectTo === 'string') {
-    return Promise.resolve(redirectTo);
-  }
-  const redirectToFn = redirectTo;
-  const currentSnapshot = getCurrentSnapshot();
-  return firstValueFrom(`,
-  ],
-
-  // 6. matchWithChecks: pass a thunk instead of a built snapshot.
-  [
-    `  const currentSnapshot = createPreMatchRouteSnapshot(createSnapshot(result));
-  injector = getOrCreateRouteInjectorIfNeeded(route, injector);
-  return runCanMatchGuards(injector, route, segments, urlSerializer, currentSnapshot, abortSignal)`,
-    `  injector = getOrCreateRouteInjectorIfNeeded(route, injector);
-  return runCanMatchGuards(injector, route, segments, urlSerializer, () => createPreMatchRouteSnapshot(createSnapshot(result)), abortSignal)`,
-  ],
-
-  // 7. Recognizer: memo fields.
+  // 3. Recognizer: the memo fields behind the shared query map.
   [
     `  absoluteRedirectCount = 0;
   allowRedirects = true;
@@ -203,7 +161,7 @@ function isEmptyObject(obj) {
   constructor(injector, configLoader,`,
   ],
 
-  // 8. Recognizer: the shared frozen queryParams getter.
+  // 4. Recognizer: the getter itself.
   [
     `    this.applyRedirects = new ApplyRedirects(this.urlSerializer, this.urlTree);
   }
@@ -222,7 +180,7 @@ function isEmptyObject(obj) {
   noMatchError(e) {`,
   ],
 
-  // 9. Root snapshot uses the shared object.
+  // 5. The root snapshot uses the shared object.
   [
     `    const rootSnapshot = new ActivatedRouteSnapshot([], Object.freeze({}), Object.freeze({
       ...this.urlTree.queryParams
@@ -230,26 +188,15 @@ function isEmptyObject(obj) {
     `    const rootSnapshot = new ActivatedRouteSnapshot([], Object.freeze({}), this.queryParams, this.urlTree.fragment,`,
   ],
 
-  // 10. Redirect pre-match snapshot becomes a thunk.
-  [
-    `    const currentSnapshot = this.createSnapshot(injector, route, segments, parameters, parentRoute);
-    if (this.abortSignal.aborted) {
-      throw new Error(this.abortSignal.reason);
-    }
-    const newTree = await this.applyRedirects.applyRedirectCommands(consumedSegments, route.redirectTo, positionalParamSegments, createPreMatchRouteSnapshot(currentSnapshot), injector);`,
-    `    if (this.abortSignal.aborted) {
-      throw new Error(this.abortSignal.reason);
-    }
-    const newTree = await this.applyRedirects.applyRedirectCommands(consumedSegments, route.redirectTo, positionalParamSegments, () => createPreMatchRouteSnapshot(this.createSnapshot(injector, route, segments, parameters, parentRoute)), injector);`,
-  ],
-
-  // 11. createSnapshot: shared queryParams, and stop re-freezing what getInherited already froze.
+  // 6. And so does every other snapshot.
   [
     `    const snapshot = new ActivatedRouteSnapshot(segments, parameters, Object.freeze({
       ...this.urlTree.queryParams
     }), this.urlTree.fragment, getData(route),`,
     `    const snapshot = new ActivatedRouteSnapshot(segments, parameters, this.queryParams, this.urlTree.fragment, getData(route),`,
   ],
+
+  // 7. getInherited already froze these, so stop re-freezing them.
   [
     `    snapshot.params = Object.freeze(inherited.params);
     snapshot.data = Object.freeze(inherited.data);`,

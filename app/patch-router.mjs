@@ -9,9 +9,10 @@
 //
 // And the candidate fix itself, which is not proof-only. See router-fix.mjs.
 //
-//   fix          the 12-site fix: shared frozen query map, no pre-match snapshot
-//                without a canMatch, shared inherited params and lazy resolve
-//   fix-count    the fix with the counters on top, to show what it removed
+//   fix          the candidate fix from the validation task: shared frozen query
+//                map, shared inherited params and data, lazy resolve. router-fix.mjs
+//                has the detail.
+//   fix-count    the same with the counters on top, to show what it removed
 import { readFileSync, writeFileSync } from "node:fs";
 import { applyFix, FIXED_SNAPSHOT_ANCHOR } from "./router-fix.mjs";
 

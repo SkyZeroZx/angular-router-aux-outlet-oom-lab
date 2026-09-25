@@ -1,0 +1,217 @@
+diff --git a/packages/router/src/recognize.ts b/packages/router/src/recognize.ts
+index 0af4e5d837..ba25563399 100644
+--- a/packages/router/src/recognize.ts
++++ b/packages/router/src/recognize.ts
+@@ -72,6 +72,10 @@ export class Recognizer {
+   private absoluteRedirectCount = 0;
+   allowRedirects = true;
+
++  /** The `urlTree.queryParams` object `frozenQueryParams` was created from. */
++  private frozenQueryParamsSource: Params | undefined;
++  private frozenQueryParams: Params | undefined;
++
+   constructor(
+     private injector: EnvironmentInjector,
+     private configLoader: RouterConfigLoader,
+@@ -85,6 +89,24 @@ export class Recognizer {
+     this.applyRedirects = new ApplyRedirects(this.urlSerializer, this.urlTree);
+   }
+
++  /**
++   * The frozen `queryParams` every snapshot of this recognition is created with.
++   *
++   * Query parameters belong to the URL rather than to any one route, so all snapshots observe the
++   * same values and can share a single object. Copying them per snapshot made the cost of
++   * recognizing a URL the product of the number of routes matched and the width of the query
++   * string, and a URL controls both: empty path routes match once per outlet the URL names.
++   */
++  private get queryParams(): Params {
++    // Keyed on the object rather than computed once, because `urlTree` is replaced when an absolute
++    // redirect is applied.
++    if (this.frozenQueryParamsSource !== this.urlTree.queryParams) {
++      this.frozenQueryParamsSource = this.urlTree.queryParams;
++      this.frozenQueryParams = Object.freeze({...this.urlTree.queryParams});
++    }
++    return this.frozenQueryParams!;
++  }
++
+   private noMatchError(e: NoMatch): RuntimeError<RuntimeErrorCode.NO_MATCH> {
+     return new RuntimeError(
+       RuntimeErrorCode.NO_MATCH,
+@@ -123,7 +145,7 @@ export class Recognizer {
+     const rootSnapshot = new ActivatedRouteSnapshot(
+       [],
+       Object.freeze({}),
+-      Object.freeze({...this.urlTree.queryParams}),
++      this.queryParams,
+       this.urlTree.fragment,
+       Object.freeze({}),
+       PRIMARY_OUTLET,
+@@ -384,7 +406,7 @@ export class Recognizer {
+     const snapshot = new ActivatedRouteSnapshot(
+       segments,
+       parameters,
+-      Object.freeze({...this.urlTree.queryParams}),
++      this.queryParams,
+       this.urlTree.fragment,
+       getData(route),
+       getOutlet(route),
+@@ -393,9 +415,11 @@ export class Recognizer {
+       getResolve(route),
+       injector,
+     );
++    // `getInherited` returns frozen `params` and `data` to prevent readers of the Router state from
++    // modifying them outside of a navigation.
+     const inherited = getInherited(snapshot, parentRoute, this.paramsInheritanceStrategy);
+-    snapshot.params = Object.freeze(inherited.params);
+-    snapshot.data = Object.freeze(inherited.data);
++    snapshot.params = inherited.params;
++    snapshot.data = inherited.data;
+     return snapshot;
+   }
+
+diff --git a/packages/router/src/router_state.ts b/packages/router/src/router_state.ts
+index d256d8cc75..de396af526 100644
+--- a/packages/router/src/router_state.ts
++++ b/packages/router/src/router_state.ts
+@@ -298,8 +298,20 @@ export const DEFAULT_PARAMS_INHERITANCE_STRATEGY: ParamsInheritanceStrategy = 'a
+
+ /** @internal */
+ export type Inherited = {
++  /**
++   * Frozen. When the route contributes no params of its own, this is the parent's `params` object
++   * rather than a copy of it.
++   */
+   params: Params;
++  /**
++   * Frozen during recognition. When the route contributes no data of its own, this is the parent's
++   * `data` object rather than a copy of it.
++   */
+   data: Data;
++  /**
++   * Built on first read. `getInherited` is called once for every route recognition matches, but
++   * only resolvers read this, and building it costs the size of the inherited data.
++   */
+   resolve: Data;
+ };
+
+@@ -314,47 +326,89 @@ export function getInherited(
+   parent: ActivatedRouteSnapshot | null,
+   paramsInheritanceStrategy: ParamsInheritanceStrategy,
+ ): Inherited {
+-  let inherited: Inherited;
+   const {routeConfig} = route;
+-  if (
++  // The parent to inherit from, or `null` when this route does not inherit.
++  const inheritedParent =
+     parent !== null &&
+     (paramsInheritanceStrategy === 'always' ||
+       // inherit parent data if route is empty path
+       routeConfig?.path === '' ||
+       // inherit parent data if parent was componentless
+       (!parent.component && !parent.routeConfig?.loadComponent))
+-  ) {
+-    inherited = {
+-      params: {...parent.params, ...route.params},
+-      data: {...parent.data, ...route.data},
+-      resolve: {
+-        // Snapshots are created with data inherited from parent and guards (i.e. canActivate) can
+-        // change data because it's not frozen...
+-        // This first line could be deleted chose to break/disallow mutating the `data` object in
+-        // guards.
+-        // Note that data from parents still override this mutated data so anyone relying on this
+-        // might be surprised that it doesn't work if parent data is inherited but otherwise does.
+-        ...route.data,
+-        // Ensure inherited resolved data overrides inherited static data
+-        ...parent.data,
+-        // static data from the current route overrides any inherited data
+-        ...routeConfig?.data,
+-        // resolved data from current route overrides everything
+-        ...route._resolvedData,
+-      },
++      ? parent
++      : null;
++
++  let resolve: Data | undefined;
++  const computeResolve = (): Data => {
++    const result: Data = inheritedParent
++      ? {
++          // Snapshots are created with data inherited from parent and guards (i.e. canActivate) can
++          // change data because it's not frozen...
++          // This first line could be deleted chose to break/disallow mutating the `data` object in
++          // guards.
++          // Note that data from parents still override this mutated data so anyone relying on this
++          // might be surprised that it doesn't work if parent data is inherited but otherwise does.
++          ...route.data,
++          // Ensure inherited resolved data overrides inherited static data
++          ...inheritedParent.data,
++          // static data from the current route overrides any inherited data
++          ...routeConfig?.data,
++          // resolved data from current route overrides everything
++          ...route._resolvedData,
++        }
++      : {...route.data, ...(route._resolvedData ?? {})};
++    if (routeConfig && hasStaticTitle(routeConfig)) {
++      result[RouteTitleKey] = routeConfig.title;
++    }
++    return result;
++  };
++
++  if (inheritedParent) {
++    // Whether the route contributes anything of its own. This returns as soon as a key is found
++    // rather than collecting them, so the cost does not grow with the size of the object, which
++    // matters because these are sized by the URL.
++    const hasNoOwnKeys = (obj: Object): boolean => {
++      // Spreading an object, which is what this replaces, tolerates a nullish value.
++      if (obj === null || obj === undefined) {
++        return true;
++      }
++      for (const key in obj) {
++        if (Object.prototype.hasOwnProperty.call(obj, key)) {
++          return false;
++        }
++      }
++      return Object.getOwnPropertySymbols(obj).length === 0;
+     };
+-  } else {
+-    inherited = {
+-      params: {...route.params},
+-      data: {...route.data},
+-      resolve: {...route.data, ...(route._resolvedData ?? {})},
++
++    return {
++      // A route that contributes nothing of its own inherits the parent's object as-is. Throughout
++      // recognition the parent's `params` and `data` are frozen - the root snapshot is created with
++      // frozen objects and every other snapshot is given a frozen result of this function - so
++      // sharing them is not observable. (`resolve_data` replaces `data` with an unfrozen object
++      // afterwards, but only `resolve` is read from then on.) Copying instead would make the cost
++      // of recognizing a URL the product of the number of routes matched and the width of the
++      // inherited object, and both of those can be driven by the URL: empty path routes match once
++      // per outlet named in the URL, and matrix parameters on a consumed segment become inherited
++      // params.
++      params: hasNoOwnKeys(route.params)
++        ? inheritedParent.params
++        : Object.freeze({...inheritedParent.params, ...route.params}),
++      data: hasNoOwnKeys(route.data)
++        ? inheritedParent.data
++        : Object.freeze({...inheritedParent.data, ...route.data}),
++      get resolve() {
++        return (resolve ??= computeResolve());
++      },
+     };
+   }
+
+-  if (routeConfig && hasStaticTitle(routeConfig)) {
+-    inherited.resolve[RouteTitleKey] = routeConfig.title;
+-  }
+-  return inherited;
++  return {
++    params: Object.freeze({...route.params}),
++    data: Object.freeze({...route.data}),
++    get resolve() {
++      return (resolve ??= computeResolve());
++    },
++  };
+ }
+
+ /**

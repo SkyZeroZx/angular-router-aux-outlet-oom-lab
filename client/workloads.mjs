@@ -50,7 +50,7 @@ function outlets(count) {
 // run of "a" of its own length, so "b" becomes "a" and "cd" becomes "aa". Same
 // bytes, same pair count, one distinct name per length. The Router parses the
 // same pairs and retains the same values either way.
-export function buildTarget({ shape, mode, outletCount, queryNames }) {
+export function buildTarget({ shape, mode, outletCount, queryNames, matrixNames = 0 }) {
   const names = Array.from({ length: queryNames }, (_, index) => keyAt(index));
   const query =
     mode === "control"
@@ -60,6 +60,18 @@ export function buildTarget({ shape, mode, outletCount, queryNames }) {
   // A dimension set to zero contributes none of its own syntax: no empty "()"
   // group and no bare "?". That keeps each single-dimension arm at the bytes of
   // its own dimension alone.
-  const path = outletCount ? `/${shape}/(${outlets(outletCount)})` : `/${shape}`;
+  // Matrix parameters ride on the first segment, so the parent snapshot owns a
+  // wide params map that every empty-path child inherits by copying.
+  // MATRIX_CLIFF repeats the last name, so the request keeps every byte and every
+  // parsed entry but the map ends up with one fewer own property. That is the
+  // control for the V8 dictionary-capacity step, not for the byte count.
+  const cliff = process.env["MATRIX_CLIFF"] ? 1 : 0;
+  const matrix = Array.from({ length: matrixNames }, (_, index) =>
+    mode === "control"
+      ? `;${"a".repeat(keyAt(index).length)}`
+      : `;${keyAt(index === matrixNames - 1 ? index - cliff : index)}`,
+  ).join("");
+  const segment = `/${shape}${matrix}`;
+  const path = outletCount ? `${segment}/(${outlets(outletCount)})` : segment;
   return queryNames ? `${path}?${query.join("&")}` : path;
 }

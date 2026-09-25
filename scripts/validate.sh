@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 #   guard    the same shape behind an async canMatch guard, swept over the
 #            guard's per-check delay.
 #   fixcheck the candidate fix end to end: no OOM, no amplifier, same output
+#   aux      matrix-parameter width against a layout with a named modal outlet
 #   gdepth   the guarded column by empty-path depth, through Nginx
 #   matrix   both shapes, both request-line sizes, four heaps, through Nginx.
 #
@@ -94,6 +95,36 @@ start_fresh_worker() {
   local cmd
   cmd="$(docker inspect -f '{{json .Config.Cmd}}' "$(app_cid)" 2>/dev/null || true)"
   grep -q "max-old-space-size=${HEAP_MB}" <<<"$cmd" || return 2
+
+  # And the build is the other half of the measurement. There was a guard for the
+  # heap and none for this, which is how three runs of the same stock bundle came
+  # back looking like stock, patched and PR-patched: anything that rebuilds the
+  # image between the build and the trial silently wins. Assert the patch inside
+  # the process that produces the number.
+  assert_router_patch || return 3
+}
+
+# Greps the running worker's own copy of the bundle for a marker only the
+# requested ROUTER_PATCH can have put there.
+assert_router_patch() {
+  local want="${ROUTER_PATCH:-none}" marker found
+  case "$want" in
+  none) marker='' ;;
+  count) marker='globalThis.__s' ;;
+  share-query) marker='this.__shared' ;;
+  fix | fix-count | fix-probe | fix-pr) marker='frozenQueryParamsSource' ;;
+  *) marker='' ;;
+  esac
+  found="$(docker exec "$(app_cid)" sh -c \
+    'grep -c "frozenQueryParamsSource\|this.__shared\|globalThis.__s" node_modules/@angular/router/fesm2022/_router-chunk.mjs || true' \
+    2>/dev/null | tr -d '\r')"
+  : "${found:=0}"
+  if [[ -z "$marker" ]]; then
+    [[ "$found" == 0 ]] || return 1
+    return 0
+  fi
+  docker exec "$(app_cid)" sh -c \
+    "grep -q '$marker' node_modules/@angular/router/fesm2022/_router-chunk.mjs" 2>/dev/null
 }
 
 # Runs one client against a fresh worker and sets TRIAL_*. Deliberately not
@@ -118,6 +149,7 @@ trial() {
   case $boot in
   1) TRIAL_VERDICT=boot-timeout; return ;;
   2) TRIAL_VERDICT=wrong-heap; return ;;
+  3) TRIAL_VERDICT=wrong-build; return ;;
   esac
 
   peak_start
@@ -221,7 +253,7 @@ build_app() {
 # The URL the client would send, without sending it.
 path_bytes() {
   docker compose --profile test run --rm --no-deps --entrypoint node "$1" \
-    -e 'import("./workloads.mjs").then(({buildTarget})=>console.log(Buffer.byteLength(buildTarget({shape:process.env.SHAPE,mode:process.env.MODE,outletCount:+process.env.OUTLETS,queryNames:+process.env.QUERY_NAMES}))))' \
+    -e 'import("./workloads.mjs").then(({buildTarget})=>console.log(Buffer.byteLength(buildTarget({shape:process.env.SHAPE,mode:process.env.MODE,outletCount:+process.env.OUTLETS,queryNames:+process.env.QUERY_NAMES,matrixNames:+(process.env.MATRIX_NAMES||0)}))))' \
     2>/dev/null | tr -d '\r' | tail -1
 }
 
@@ -427,6 +459,41 @@ fixcheck)
   build_app none
   ;;
 
+aux)
+  # The width carried by matrix parameters on the first segment instead of by the
+  # query string, against a pathless layout holding a default page and an empty
+  # named modal route. Two empty-path children at the inner level, so recognition
+  # builds six snapshots per URL outlet rather than four: 8 + 6*O.
+  #
+  # The interesting control is not the equal-byte one. It is the cliff: repeating
+  # the last matrix name keeps every byte and every parsed entry while leaving the
+  # map one own property short, which isolates the V8 dictionary capacity step
+  # from the byte count.
+  export SHAPE=aux SERVICES=app TARGET_URL=http://app:4000 FOLLOW=1 NO_SEP=1
+  export QUERY_NAMES=0 CANMATCH_MS=0 HEAP_MB="${HEAP_MB:-256}"
+  echo "== aux | heap ${HEAP_MB} MiB | 1 request | ${TRIALS} fresh workers per arm =="
+  printf '%-28s %-8s %-8s %-7s %-11s %-14s %-10s %s\n' \
+    arm outlets matrix bytes snapshots outcome "median ms" "median peak MiB"
+
+  for spec in \
+    "candidate:670:1366:0:candidate" \
+    "candidate:670:1366:1:cliff control, 1365 distinct" \
+    "control:670:1366:0:equal bytes, 2 distinct" \
+    "candidate:0:1366:0:matrix width only" \
+    "candidate:670:0:0:outlet fan-out only"; do
+    IFS=: read -r mode outlets matrix cliff label <<<"$spec"
+    export OUTLETS="$outlets" MATRIX_NAMES="$matrix" MODE="$mode"
+    if [[ "$cliff" == 1 ]]; then export MATRIX_CLIFF=1; else unset MATRIX_CLIFF; fi
+    bytes="$(path_bytes "$mode")"
+    repeat "$mode" 1 "aux-${HEAP_MB}-o${outlets}-m${matrix}-c${cliff}"
+    printf '%-28s %-8s %-8s %-7s %-11s %-14s %-10s %s\n' \
+      "$label" "$outlets" "$matrix" "$bytes" "$((8 + 6 * outlets))" \
+      "${REPEAT_FATAL}/${TRIALS} fatal" "$REPEAT_MS" "$REPEAT_PEAK"
+    echo "    status ${REPEAT_STATUS}, body sha256 ${REPEAT_SHA}"
+  done
+  unset MATRIX_CLIFF
+  ;;
+
 gdepth)
   # The guarded column by empty-path depth, through Nginx so it is comparable
   # cell for cell with the matrix arm. The matrix already covers depth 2; this
@@ -486,7 +553,7 @@ matrix)
   ;;
 
 *)
-  echo "Usage: $0 [shop|arms|diff|counts|ablation|fuzz|fixcheck|guard|gdepth|matrix]" >&2
+  echo "Usage: $0 [shop|arms|aux|diff|counts|ablation|fuzz|fixcheck|guard|gdepth|matrix]" >&2
   exit 2
   ;;
 esac

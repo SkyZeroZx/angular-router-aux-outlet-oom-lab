@@ -1,5 +1,7 @@
 import { Routes } from "@angular/router";
 import { Layout } from "./layout";
+import { AuxLayout } from "./aux-layout";
+import { ModalPage } from "./modal-page";
 import { NotFound } from "./not-found";
 import { ShopPage } from "./shop-page";
 
@@ -143,6 +145,29 @@ export const routes: Routes = [
               },
             ],
           },
+        ],
+      },
+    ],
+  },
+
+  // A pathless layout with a default page and an empty named modal route. Two
+  // empty-path children at the inner level instead of one, so recognition builds
+  // six snapshots per URL outlet rather than four. This is the shape that makes
+  // the parent segment's matrix parameters expensive: getInherited() copies them
+  // into every snapshot, which is a different site from the query map.
+  //
+  // The layout carries AuxLayout only because the named outlet has to live
+  // somewhere; the published shape has it componentless and root-level, which
+  // would change every other arm's rendered bytes.
+  {
+    path: "aux",
+    children: [
+      {
+        path: "",
+        component: AuxLayout,
+        children: [
+          { path: "", component: ShopPage },
+          { path: "", outlet: "modal", component: ModalPage },
         ],
       },
     ],

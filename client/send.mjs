@@ -9,6 +9,7 @@ const REQUEST_TIMEOUT_MS = 300_000;
 // shop1  the same thing with one empty-path level, for the depth comparison
 // shop3  three levels, shop4 four, to measure what depth is worth
 // layout the two-level shape with a component on the outer level
+// aux    a pathless layout with a default page and an empty named modal route
 // guard3, guard4  the guarded shape at three and four levels
 // guard  the same shape behind an async canMatch guard; concurrency compounds
 const shape = process.env.SHAPE ?? "shop";
@@ -16,6 +17,8 @@ const mode = process.env.MODE ?? "candidate";
 const concurrency = Number(process.env.CONCURRENCY ?? "1");
 const outletCount = Number(process.env.OUTLETS ?? "480");
 const queryNames = Number(process.env.QUERY_NAMES ?? "1377");
+// Matrix parameters on the first segment. The /aux shape is what makes them cost.
+const matrixNames = Number(process.env.MATRIX_NAMES ?? "0");
 
 // Recognition ends on a redirect to the merged URL, so the rendered body is one
 // hop away. Following it is how the arms are compared for identical output, and
@@ -23,7 +26,7 @@ const queryNames = Number(process.env.QUERY_NAMES ?? "1377");
 // concurrency arms measure.
 const follow = process.env.FOLLOW === "1";
 
-const SHAPES = ["shop", "shop1", "shop3", "shop4", "layout", "guard", "guard3", "guard4"];
+const SHAPES = ["shop", "shop1", "shop3", "shop4", "layout", "aux", "guard", "guard3", "guard4"];
 if (!SHAPES.includes(shape)) {
   throw new Error(`Unsupported SHAPE=${shape}. Expected one of ${SHAPES.join(", ")}.`);
 }
@@ -31,7 +34,7 @@ if (!["candidate", "control"].includes(mode)) {
   throw new Error(`Unsupported MODE=${mode}. Expected "candidate" or "control".`);
 }
 
-const path = buildTarget({ shape, mode, outletCount, queryNames });
+const path = buildTarget({ shape, mode, outletCount, queryNames, matrixNames });
 const pathBytes = Buffer.byteLength(path);
 
 console.log(
@@ -41,6 +44,7 @@ console.log(
     concurrency,
     outlets: outletCount,
     queryNames,
+    matrixNames,
     distinctQueryNames: mode === "candidate" ? queryNames : 2,
     pathBytes,
     // Node's own default header budget is 16 KiB, so this needs no tuning.
