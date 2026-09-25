@@ -46,5 +46,9 @@ export function buildTarget({ shape, mode, outletCount, queryNames }) {
       ? names.map((name) => "a".repeat(name.length))
       : names;
 
-  return `/${shape}/(${outlets(outletCount)})?${query.join("&")}`;
+  // A dimension set to zero contributes none of its own syntax: no empty "()"
+  // group and no bare "?". That keeps each single-dimension arm at the bytes of
+  // its own dimension alone.
+  const path = outletCount ? `/${shape}/(${outlets(outletCount)})` : `/${shape}`;
+  return queryNames ? `${path}?${query.join("&")}` : path;
 }

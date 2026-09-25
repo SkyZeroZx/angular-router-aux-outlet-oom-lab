@@ -1,0 +1,3 @@
+# The archive is unzipped on Linux as often as not, and a CRLF shebang makes
+# scripts/validate.sh unrunnable there. Keep every text file LF in the tree.
+* text=auto eol=lf
