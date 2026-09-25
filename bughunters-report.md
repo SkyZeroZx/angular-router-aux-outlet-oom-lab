@@ -270,20 +270,20 @@ with the pre-match snapshot and every parent recognition frame still live, which
 is the one hook that yields the event loop from inside recognition, so several
 requests' speculative trees coexist.
 
-The full grid, behind Nginx, ramping concurrency to six per cell:
+The full grid, behind Nginx, probing sixteen concurrent first, then ramping for the exact count:
 
 | Request line | Heap | No guard | Async canMatch |
 | -----------: | ---: | -------: | -------------: |
 | 7,888 B | 128 MiB | **1** | **1** |
-| | 256 MiB | none up to 6 | **3** |
-| | 512 MiB | none up to 6 | **5** |
-| | 1,024 MiB | none up to 6 | none up to 6 |
+| | 256 MiB | survives 16 | **2** |
+| | 512 MiB | survives 16 | **5** |
+| | 1,024 MiB | survives 16 | between 6 and 16 |
 | 16,255 B | 128 MiB | **1** | **1** |
 | | 256 MiB | **1** | **1** |
-| | 512 MiB | none up to 6 | **2** |
-| | 1,024 MiB | none up to 6 | **4** |
+| | 512 MiB | survives 16 | **2** |
+| | 1,024 MiB | survives 16 | **4** |
 
-Without the guard, either one request already exceeds the heap or six do not.
+Without the guard, either one request already exceeds the heap or sixteen do not.
 With it the two levers multiply, and four 16 KiB requests take down a 1 GiB
 worker. `canMatch` is ordinary; feature flags, entitlement checks and A/B
 routing all use it, and an async one is the normal case.

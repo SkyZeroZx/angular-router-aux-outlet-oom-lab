@@ -144,25 +144,35 @@ line, and its only setting that is not an Nginx default.
 ```
 
 | Request line | Heap | No guard | Async canMatch |
-| -----------: | ---: | -------: | -------------: |
+| -----------: | ---: | -----------: | -------------: |
 | 7,888 B | 128 MiB | **1** | **1** |
-| | 256 MiB | none up to 6 | **3** |
-| | 512 MiB | none up to 6 | **5** |
-| | 1,024 MiB | none up to 6 | none up to 6 |
+| | 256 MiB | survives 16 | **2** |
+| | 512 MiB | survives 16 | **5** |
+| | 1,024 MiB | survives 16 | between 6 and 16 |
 | 16,255 B | 128 MiB | **1** | **1** |
 | | 256 MiB | **1** | **1** |
-| | 512 MiB | none up to 6 | **2** |
-| | 1,024 MiB | none up to 6 | **4** |
+| | 512 MiB | survives 16 | **2** |
+| | 1,024 MiB | survives 16 | **4** |
+
+A bare number is the lowest concurrency that lost the worker. `survives 16` means
+sixteen concurrent requests left it healthy — the ramp probes its ceiling first,
+so a cell that survives the ceiling is one measurement rather than a wasted
+climb, and the number it reports is the evidence rather than the ramp's own
+limit.
 
 Two things fall out of it.
 
 Without the guard, concurrency buys nothing: either one request already exceeds
-the heap or six do not. Recognition saturates the thread, requests serialize, and
-each snapshot tree is collectable before the next one peaks. The lever is request
-size, not request rate.
+the heap or sixteen do not. Recognition saturates the thread, requests serialize,
+and each snapshot tree is collectable before the next one peaks. The lever is
+request size, not request rate.
 
 With the guard, concurrency compounds and the two levers multiply: four 16 KiB
 requests take down a 1 GiB worker.
+
+The exact count at a boundary moves by one between runs — the 8 KiB, 256 MiB,
+guarded cell has measured both 2 and 3. Treat these as the boundary to within a
+request, not as constants.
 
 Neither size needs anything tuned to be accepted. 7,888 bytes of request line
 fits Node's default 16 KiB header budget on its own, and 16,255 still fits it
