@@ -1,4 +1,5 @@
 import { Routes } from "@angular/router";
+import { Layout } from "./layout";
 import { NotFound } from "./not-found";
 import { ShopPage } from "./shop-page";
 
@@ -38,6 +39,60 @@ export const routes: Routes = [
     children: [{ path: "", component: ShopPage }],
   },
 
+  // Three and four consecutive empty-path levels. Depth is the application's
+  // choice, not the attacker's, and recognition pays for it linearly, so these
+  // are here to measure the multiplier rather than to argue it. Written out
+  // literally, like every other shape in this file.
+  {
+    path: "shop3",
+    children: [
+      {
+        path: "",
+        children: [
+          {
+            path: "",
+            children: [{ path: "", component: ShopPage }],
+          },
+        ],
+      },
+    ],
+  },
+
+  {
+    path: "shop4",
+    children: [
+      {
+        path: "",
+        children: [
+          {
+            path: "",
+            children: [
+              {
+                path: "",
+                children: [{ path: "", component: ShopPage }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+
+  // Two empty-path levels again, but the outer one carries a layout component
+  // instead of being componentless. This is the shape most applications actually
+  // have, so it decides whether the precondition is "componentless grouping" or
+  // just "an empty-path level".
+  {
+    path: "layout",
+    children: [
+      {
+        path: "",
+        component: Layout,
+        children: [{ path: "", component: ShopPage }],
+      },
+    ],
+  },
+
   // The same shape with an async canMatch guard on the outer empty-path level.
   // Concurrent requests overlap here, so their peaks add up.
   {
@@ -47,6 +102,48 @@ export const routes: Routes = [
         path: "",
         canMatch: [slowMatch],
         children: [{ path: "", component: ShopPage }],
+      },
+    ],
+  },
+
+  // The guarded shape at three and four empty-path levels. The guard stays on the
+  // OUTER level in every one of them, so the only thing that changes between
+  // /guard, /guard3 and /guard4 is how many levels the fan-out runs through.
+  // Without these the depth question can only be answered for the no-guard
+  // column, which is half the table.
+  {
+    path: "guard3",
+    children: [
+      {
+        path: "",
+        canMatch: [slowMatch],
+        children: [
+          {
+            path: "",
+            children: [{ path: "", component: ShopPage }],
+          },
+        ],
+      },
+    ],
+  },
+
+  {
+    path: "guard4",
+    children: [
+      {
+        path: "",
+        canMatch: [slowMatch],
+        children: [
+          {
+            path: "",
+            children: [
+              {
+                path: "",
+                children: [{ path: "", component: ShopPage }],
+              },
+            ],
+          },
+        ],
       },
     ],
   },

@@ -7,6 +7,9 @@ const REQUEST_TIMEOUT_MS = 300_000;
 
 // shop   the plain two-level empty-path group; one request is enough
 // shop1  the same thing with one empty-path level, for the depth comparison
+// shop3  three levels, shop4 four, to measure what depth is worth
+// layout the two-level shape with a component on the outer level
+// guard3, guard4  the guarded shape at three and four levels
 // guard  the same shape behind an async canMatch guard; concurrency compounds
 const shape = process.env.SHAPE ?? "shop";
 const mode = process.env.MODE ?? "candidate";
@@ -20,8 +23,9 @@ const queryNames = Number(process.env.QUERY_NAMES ?? "1377");
 // concurrency arms measure.
 const follow = process.env.FOLLOW === "1";
 
-if (!["shop", "shop1", "guard"].includes(shape)) {
-  throw new Error(`Unsupported SHAPE=${shape}. Expected "shop", "shop1" or "guard".`);
+const SHAPES = ["shop", "shop1", "shop3", "shop4", "layout", "guard", "guard3", "guard4"];
+if (!SHAPES.includes(shape)) {
+  throw new Error(`Unsupported SHAPE=${shape}. Expected one of ${SHAPES.join(", ")}.`);
 }
 if (!["candidate", "control"].includes(mode)) {
   throw new Error(`Unsupported MODE=${mode}. Expected "candidate" or "control".`);
