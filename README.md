@@ -60,6 +60,7 @@ default.
 ./scripts/validate.sh arms      # both dimensions, then each alone, 128 MiB
 ./scripts/validate.sh diff      # the same four arms where none of them die
 ./scripts/validate.sh counts    # snapshots and query copies, per depth
+./scripts/validate.sh aux       # matrix-param width against a named modal outlet
 ./scripts/validate.sh ablation  # stock against the shared-query-map edit
 ./scripts/validate.sh fuzz      # splits one request-line budget between the two
 ./scripts/validate.sh guard     # the async canMatch sweep
@@ -253,6 +254,92 @@ Largest heap one request kills, no guard, best payload for each request line:
 The peak grows sublinearly with depth even though the snapshot count does not. At
 256 MiB the 8 KiB payload peaked 218.6, 275.6 and 309.8 MiB at two, three and four
 levels, where the count grew 1.0x, 1.5x and 2.0x.
+
+## The matrix-parameter shape
+
+The same fan-out reaches a second copy site, and that one needs no query string.
+`getInherited()` builds `{...parent.params, ...route.params}` for every snapshot,
+and the condition `routeConfig?.path === ''` makes every empty-path route take
+that branch. So matrix parameters on the consumed segment are copied once per
+snapshot, exactly as the query map is.
+
+`/aux` is a pathless layout holding a default page and an empty named modal
+route. Two empty-path children at the inner level instead of one, so recognition
+builds six snapshots per URL outlet instead of four:
+
+```ts
+{
+  path: "aux",
+  children: [
+    {
+      path: "",
+      component: AuxLayout,
+      children: [
+        {path: "", component: ShopPage},
+        {path: "", outlet: "modal", component: ModalPage},
+      ],
+    },
+  ],
+}
+```
+
+Measured with `ROUTER_PATCH=count`: 308 snapshots at 100 outlets and 608 at 200,
+so `8 + 6 x O`. At 670 outlets that is 4,028, and with 1,366 matrix names the
+snapshots copy 5,502,248 inherited properties.
+
+```text
+/aux;a;b;c;...;zm(a:/()b:/()c:/()...)      670 outlets x 1,366 matrix names
+```
+
+```bash
+./scripts/validate.sh aux
+```
+
+256 MiB, one request, three fresh workers per arm. Every arm in the first three
+rows is the same 8,021 bytes and builds the same 4,028 snapshots. Only the number
+of distinct names changes:
+
+| arm | outlets | matrix names | bytes | outcome | median peak |
+| --- | ------: | -----------: | ----: | ------- | ----------: |
+| candidate, 1,366 distinct | 670 | 1,366 | 8,021 | **3/3 fatal** | 299 MiB |
+| cliff control, 1,365 distinct | 670 | 1,366 | 8,021 | 0/3 fatal | 206 MiB |
+| equal bytes, 2 distinct | 670 | 1,366 | 8,021 | 0/3 fatal | 57 MiB |
+| matrix width only | 0 | 1,366 | 4,050 | 0/3 fatal | 53 MiB |
+| outlet fan-out only | 670 | 0 | 3,975 | 0/3 fatal | 55 MiB |
+
+The cliff control repeats the last name, so the request keeps every byte and every
+parsed entry while the map ends up one own property short. That isolates the V8
+dictionary capacity step from the byte count: 1,365 names sit at capacity 2,048
+and 1,366 at 4,096. All four survivors return the same 870-byte body, SHA-256
+`fc0cb53d...`.
+
+Largest heap one request kills:
+
+| heap | candidate |
+| ---: | --------- |
+| 128 MiB | **3/3 fatal** |
+| 256 MiB | **3/3 fatal** |
+| 512 MiB | 0/3 fatal, 356 MiB peak |
+
+This shape is stronger than the query one for the same budget. 8,021 bytes kills
+256 MiB where the 7,873-byte query payload kills 128, because six snapshots per
+outlet instead of four, and because matrix names spend no `?` and the outlets
+carry no separator.
+
+The fix closes it. At 1,024 MiB nothing dies on either build, so the peak is a
+peak and not a floor:
+
+| heap | stock | patched |
+| ---: | ----- | ------- |
+| 256 MiB | **3/3 fatal**, 1,747 ms | **0/3 fatal**, 247 ms |
+| 1,024 MiB | 343 MiB peak, 1,550 ms | **72 MiB peak**, 225 ms |
+
+An earlier revision of this file reported the opposite. `validate.sh` rebuilds the
+images at the top of the script, so pre-building with `ROUTER_PATCH` and then
+calling it rebuilt stock over the patched image, and three different builds
+produced numbers within 1.3% of each other. `start_fresh_worker` now greps the
+running worker's own bundle for a marker only the requested patch can have put
+there, and a mismatch fails the trial as `wrong-build`.
 
 ## Isolating it
 
