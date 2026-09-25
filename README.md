@@ -284,7 +284,7 @@ builds six snapshots per URL outlet instead of four:
 }
 ```
 
-Measured with `ROUTER_PATCH=count`: 308 snapshots at 100 outlets and 608 at 200,
+Measured with `ROUTER_PATCH=count`: 308 snapshots at 50 outlets and 608 at 100,
 so `8 + 6 x O`. At 670 outlets that is 4,028, and with 1,366 matrix names the
 snapshots copy 5,502,248 inherited properties.
 
@@ -311,7 +311,7 @@ of distinct names changes:
 The cliff control repeats the last name, so the request keeps every byte and every
 parsed entry while the map ends up one own property short. That isolates the V8
 dictionary capacity step from the byte count: 1,365 names sit at capacity 2,048
-and 1,366 at 4,096. All four survivors return the same 870-byte body, SHA-256
+and 1,366 at 4,096. All four survivors return the same 519-byte body, SHA-256
 `fc0cb53d...`.
 
 Largest heap one request kills:
