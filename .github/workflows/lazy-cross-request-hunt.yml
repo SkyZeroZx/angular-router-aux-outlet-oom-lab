@@ -35,6 +35,7 @@ jobs:
         shell: bash
         run: |
           cp -a app "hunt-app-${{ matrix.mode }}"
+          rm -f "hunt-app-${{ matrix.mode }}/package-lock.json"
           node hunt/lazy-cross-request/setup.mjs \
             "hunt-app-${{ matrix.mode }}" \
             "${{ matrix.mode }}" \
