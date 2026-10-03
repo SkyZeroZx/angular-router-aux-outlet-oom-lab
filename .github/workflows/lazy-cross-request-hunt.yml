@@ -1,0 +1,68 @@
+name: Lazy cross-request SSR hunt
+
+on:
+  push:
+    branches:
+      - research/angular22-e2e-artifact-20261003
+    paths:
+      - hunt/lazy-cross-request/**
+      - .github/workflows/lazy-cross-request-hunt.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [static, fresh]
+        angular: [22.2.1]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Prepare isolated app
+        shell: bash
+        run: |
+          cp -a app "hunt-app-${{ matrix.mode }}"
+          node hunt/lazy-cross-request/setup.mjs \
+            "hunt-app-${{ matrix.mode }}" \
+            "${{ matrix.mode }}" \
+            "${{ matrix.angular }}"
+
+      - name: Install exact Angular packages
+        working-directory: hunt-app-${{ matrix.mode }}
+        run: npm install --no-audit --no-fund
+
+      - name: Production AOT build
+        working-directory: hunt-app-${{ matrix.mode }}
+        run: npm run build
+
+      - name: Run fresh-worker stock-host trials
+        env:
+          TRIALS: 5
+          OUT_DIR: ${{ github.workspace }}/hunt-results
+        run: |
+          node hunt/lazy-cross-request/run.mjs \
+            "hunt-app-${{ matrix.mode }}" \
+            "${{ matrix.mode }}" \
+            "${{ matrix.angular }}"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazy-cross-request-${{ matrix.angular }}-${{ matrix.mode }}
+          path: hunt-results/**
+          if-no-files-found: warn
+          retention-days: 14
